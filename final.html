@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>شجرة العائلة التفاعلية</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;700&display=swap');
+
+        body {
+            background-color: #1a1a1a; 
+            margin: 0;
+            overflow: hidden;
+            font-family: 'Tajawal', sans-serif;
+            color: white;
+        }
+
+        #tree-container {
+            width: 100vw;
+            height: 100vh;
+            cursor: grab;
+        }
+
+        #tree-container:active {
+            cursor: grabbing;
+        }
+
+        .sidebar {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 300px;
+            background: rgba(30, 30, 30, 0.9);
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            -webkit-backdrop-filter: blur(5px);
+            backdrop-filter: blur(5px);
+            border: 1px solid #333;
+        }
+
+        h2, h3 { margin-top: 0; color: #ff9800; }
+        
+        input, select, button {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 10px;
+            border-radius: 6px;
+            border: 1px solid #444;
+            background: #2a2a2a;
+            color: white;
+            box-sizing: border-box;
+            font-family: inherit;
+        }
+
+        button {
+            background: #ff9800;
+            color: #000;
+            font-weight: bold;
+            cursor: pointer;
+            border: none;
+            transition: 0.3s;
+        }
+
+        button:hover { background: #e68900; }
+
+        .node text {
+            font-size: 14px;
+            fill: white;
+            text-shadow: 2px 2px 4px #000;
+            pointer-events: none;
+        }
+
+        .link {
+            fill: none;
+            stroke: #8b5a2b; 
+            stroke-opacity: 0.8;
+            stroke-linecap: round;
+        }
+
+        .node circle, .node image {
+            transition: transform 3.5s;
+            transform-origin: center;
+        }
+        
+        .node:hover circle, .node:hover image {
+            transform: scale(1.3);
+            cursor: pointer;
+            filter: drop-shadow(0 0 8px #ff9800);
+        }
+
+        hr {
+            border-color: #444;
+        }
+
+        #selectedNodeMsg {
+            font-size: 0.9em;
+            color: #8bc34a;
+        }
+
+        .small-note {
+            color: #aaa;
+            display: block;
+            margin-bottom: 15px;
+        }
+
+        .reset-btn {
+            background: #d32f2f;
+            margin-top: 10px;
+        }
+
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #333;
+            color: #fff;
+            padding: 10px 20px;
+            border-radius: 5px;
+            display: none;
+            z-index: 1000;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="tree-container"></div>
+
+    <div class="sidebar">
+        <h2>شجرة العائلة </h2>
+        
+        <h3>إضافة ذكية </h3>
+        <input type="text" id="smartInput" placeholder="مثال: أحمد محمد علي حسن">
+        <button onclick="smartAdd()">إضافة السلسلة</button>
+        <small class="small-note">
+            سيتم التقسيم: حسن (الجد) -> علي -> محمد -> أحمد (الحفيد/الورقة)
+        </small>
+
+        <hr>
+
+        <h3>إضافة يدوية</h3>
+        <p id="selectedNodeMsg">لم يتم تحديد أب (اضغط على عقدة)</p>
+        <input type="text" id="manualName" placeholder="اسم الابن/الحفيد">
+        <label for="nodeType">نوع العقدة:</label>
+        <select id="nodeType">
+            <option value="leaf">حفيد (ورقة)</option>
+            <option value="fruit">ابن (دائرة)</option>
+        </select>
+        <button onclick="manualAdd()">إضافة للعقدة المحددة</button>
+        <button onclick="resetTree()" class="reset-btn">حذف الشجرة والبدء من جديد</button>
+    </div>
+
+    <div id="toast" class="toast">تم الحفظ بنجاح</div>
+
+    <script>
+        let rootData = JSON.parse(localStorage.getItem('familyTreeData')) || {
+            name: "الجد المؤسس",
+            type: "root",
+            children: []
+        };
+
+        let selectedNode = null;
+
+        const container = d3.select("#tree-container");
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+
+        const svg = container.append("svg")
+            .attr("width", width)
+            .attr("height", height)
+            .call(d3.zoom().on("zoom", (event) => {
+                g.attr("transform", event.transform);
+            }))
+            .append("g");
+        
+        const g = svg.append("g");
+
+        g.attr("transform", `translate(${width / 2}, ${height - 100})`);
+        d3.select("svg").call(d3.zoom().transform, d3.zoomIdentity.translate(width / 2, height - 100).scale(1));
+
+
+        function update() {
+            const hierarchy = d3.hierarchy(rootData);
+            
+            const treeLayout = d3.tree().nodeSize([80, 120]); 
+            const treeData = treeLayout(hierarchy);
+            const nodes = treeData.descendants();
+            const links = treeData.links();
+            const linkSelection = g.selectAll(".link")
+                .data(links, d => d.target.data.id || (d.target.data.id = Math.random())); // ID للربط
+
+            linkSelection.enter()
+                .append("path")
+                .attr("class", "link")
+                .attr("d", d => {
+                    return `M${d.source.x},${-d.source.y} 
+                            C${d.source.x},${-(d.source.y + d.target.y) / 2} 
+                             ${d.target.x},${-(d.source.y + d.target.y) / 2} 
+                             ${d.target.x},${-d.target.y}`;
+                })
+                .style("stroke-width", d => Math.max(1, 10 - d.target.depth) + "px"); 
+            linkSelection.transition().duration(500).attr("d", d => {
+                 return `M${d.source.x},${-d.source.y} 
+                            C${d.source.x},${-(d.source.y + d.target.y) / 2} 
+                             ${d.target.x},${-(d.source.y + d.target.y) / 2} 
+                             ${d.target.x},${-d.target.y}`;
+            });
+
+            linkSelection.exit().remove();
+            const nodeSelection = g.selectAll(".node")
+                .data(nodes, d => d.data.name + d.depth);
+
+            const nodeEnter = nodeSelection.enter()
+                .append("g")
+                .attr("class", "node")
+                .attr("transform", d => `translate(${d.x},${-d.y})`)
+                .on("click", clickNode);
+            nodeEnter.each(function(d) {
+                const el = d3.select(this);
+                if (d.data.type === 'leaf' || (!d.children && d.depth > 0 && d.data.type !== 'fruit')) {
+                    el.append("image")
+                        .attr("href", "https://img.icons8.com/color/48/000000/leaf.png") 
+                        .attr("x", -15)
+                        .attr("y", -15)
+                        .attr("width", 30)
+                        .attr("height", 30);
+                } else {
+                    el.append("circle")
+                        .attr("r", d.depth === 0 ? 15 : 10) 
+                        .style("fill", "#ff9800")
+                        .style("stroke", "#fff")
+                        .style("stroke-width", "2px");
+                }
+            });
+            nodeEnter.append("text")
+                .attr("dy", d => d.children ? 25 : -20) 
+                .attr("text-anchor", "middle")
+                .text(d => d.data.name);
+            nodeSelection.transition().duration(500)
+                .attr("transform", d => `translate(${d.x},${-d.y})`);
+
+            nodeSelection.exit().remove();
+
+            saveData();
+        }
+
+        function clickNode(event, d) {
+            event.stopPropagation(); 
+            selectedNode = d;
+            document.getElementById("selectedNodeMsg").innerText = `تم تحديد: ${d.data.name}`;
+            document.getElementById("selectedNodeMsg").style.color = "#ff9800";
+                        d3.selectAll(".node circle").style("fill", "#ff9800");
+            d3.select(this).select("circle").style("fill", "#fff");
+        }
+        function smartAdd() {
+            const input = document.getElementById('smartInput').value.trim();
+            if (!input) return;
+            const names = input.split(/\s+/).reverse();
+            if (names[0] !== rootData.name) {
+                 if(rootData.children.length === 0 && rootData.name === "الجد المؤسس") {
+                     rootData.name = names[0];
+                 } else if (names[0] !== rootData.name) {
+                     alert(`تنبيه: جذر الشجرة هو "${rootData.name}"، لكنك تحاول إضافة شجرة تبدأ بـ "${names[0]}". سيتم إضافته كابن للجذر الحالي.`);
+                     names.unshift(rootData.name);
+                 }
+            }
+            let currentNode = rootData;
+            for (let i = 1; i < names.length; i++) {
+                const nameToAdd = names[i];
+                const isLeaf = (i === names.length - 1);                
+                if (!currentNode.children) currentNode.children = [];
+                let existingChild = currentNode.children.find(c => c.name === nameToAdd);
+                if (existingChild) {
+                    currentNode = existingChild;
+                } else {
+                    const newNode = {
+                        name: nameToAdd,
+                        type: isLeaf ? 'leaf' : 'fruit',
+                        children: []
+                    };
+                    currentNode.children.push(newNode);
+                    currentNode = newNode;
+                }
+            }
+            update();
+            document.getElementById('smartInput').value = '';
+            showToast("تمت الإضافة بنجاح!");
+        }
+        function manualAdd() {
+            if (!selectedNode) {
+                alert("الرجاء اختيار عقدة (أب) من الشجرة أولاً!");
+                return;
+            }
+
+            const name = document.getElementById('manualName').value.trim();
+            const type = document.getElementById('nodeType').value;
+            
+            if (!name) return;
+
+            const newNode = {
+                name: name,
+                type: type,
+                children: []
+            };
+
+            if (!selectedNode.data.children) selectedNode.data.children = [];
+            selectedNode.data.children.push(newNode);
+
+            update();
+            document.getElementById('manualName').value = '';
+        }
+        function saveData() {
+            localStorage.setItem('familyTreeData', JSON.stringify(rootData));
+        }
+
+        function showToast(msg) {
+            const t = document.getElementById("toast");
+            t.innerText = msg;
+            t.style.display = "block";
+            setTimeout(() => t.style.display = "none", 2000);
+        }
+
+        function resetTree() {
+            if(confirm("هل أنت متأكد؟ سيتم حذف كل البيانات.")) {
+                rootData = { name: "الجد المؤسس", type: "root", children: [] };
+                saveData();
+                location.reload();
+            }
+        }
+        update();
+
+    </script>
+</body>
+</html>

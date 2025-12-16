@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>شجرة العائلة الثابتة</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    
+    <style>
+        body {
+            font-family: 'Tahoma', sans-serif;
+            background-color: #ffffff;
+            margin: 0;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* --- القائمة الجانبية --- */
+        #sidebar {
+            width: 300px;
+            background-color: #f8f9fa;
+            border-left: 2px solid #ddd;
+            padding: 20px;
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            box-shadow: -4px 0 10px rgba(0,0,0,0.05);
+        }
+
+        #sidebar h3 { color: #2c3e50; margin-top: 0; text-align: center; }
+        
+        input, select, button {
+            padding: 12px;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            font-family: 'Tahoma', sans-serif;
+            outline: none;
+            width: 90%;
+        }
+
+        button.add-btn { background-color: #27ae60; color: white; border: none; cursor: pointer; font-weight: bold; margin-top: 10px; }
+        button.reset-btn { background-color: #c0392b; color: white; margin-top: 20px; border: none; cursor: pointer; }
+        button:hover { opacity: 0.9; }
+
+        /* --- مساحة الشجرة --- */
+        #tree-container {
+            flex-grow: 1;
+            position: relative;
+            background-image: radial-gradient(#e8f5e9 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+
+        .link {
+            fill: none;
+            stroke: #795548;
+            stroke-width: 2px;
+        }
+
+        .node text {
+            font-size: 14px;
+            font-weight: 900;
+            text-anchor: middle;
+            paint-order: stroke;
+            stroke: #fff;
+            stroke-width: 3px;
+            pointer-events: none; /* مهم جداً لمنع التداخل */
+            fill: #000;
+        }
+
+        /* --- الإصلاح هنا --- */
+        /* نطبق الحركة على الصورة والدائرة فقط، وليس المجموعة الكاملة */
+        .node image, .node circle {
+            cursor: pointer;
+            transition: transform 0.2s ease; /* حركة ناعمة وسريعة */
+            transform-origin: center; /* التكبير من المنتصف */
+        }
+
+        /* عند المرور بالماوس، نكبر الصورة فقط */
+        .node image:hover, .node circle:hover {
+            transform: scale(1.2); /* تكبير بسيط وثابت */
+        }
+
+        #parentName {
+            background-color: #e9ecef;
+            font-weight: bold;
+            text-align: center;
+        }
+
+    </style>
+</head>
+<body>
+
+    <div id="sidebar">
+        <h3>🌳 شجرة العائلة</h3>
+        
+        <label>الأب المختار:</label>
+        <input type="text" id="parentName" placeholder="اختر من الشجرة..." readonly>
+        
+        <label>اسم الفرد الجديد:</label>
+        <input type="text" id="childName" placeholder="اكتب الاسم...">
+        
+        <label for="childType">النوع:</label>
+        <select id="childType">
+            <option value="leaf">حفيد (ورقة)</option>
+            <option value="fruit">ابن (دائرة/ثمرة)</option>
+        </select>
+
+        <button class="add-btn" onclick="addMember()">+ إضافة للشجرة وحفظ</button>
+        <hr>
+        <button class="reset-btn" onclick="resetTree()">⚠️ مسح الشجرة</button>
+    </div>
+
+    <div id="tree-container"></div>
+
+    <script>
+        // 1. البيانات والحفظ
+        const defaultData = {
+            name: "محمد ",
+            type: "root",
+            children: [
+                {
+                    name: " كمال",
+                    type: "fruit",
+                    children: [ { name: " محمد ", type: "leaf" } ]
+                }
+            ]
+        };
+
+        let treeData = JSON.parse(localStorage.getItem('myFamilyTree')) || defaultData;
+
+        function saveData() { localStorage.setItem('myFamilyTree', JSON.stringify(treeData)); }
+        function resetTree() {
+            if(confirm("هل أنت متأكد؟")) {
+                localStorage.removeItem('myFamilyTree');
+                location.reload();
+            }
+        }
+
+        // 2. إعدادات الرسم
+        let svg, g;
+        const width = window.innerWidth - 300; 
+        const height = window.innerHeight;
+
+        function initTree() {
+            svg = d3.select("#tree-container").append("svg")
+                .attr("width", "100%")
+                .attr("height", "100%")
+                // إلغاء الزووم بالدبل كليك لمنع القفزات المفاجئة
+                .call(d3.zoom().scaleExtent([0.1, 3]).on("zoom", (e) => {
+                    g.attr("transform", e.transform);
+                }).filter(event => !event.ctrlKey && event.type !== 'dblclick')) 
+                .append("g")
+                .attr("transform", "translate(0, 150)");
+            
+            g = svg.append("g");
+            updateTree();
+        }
+
+        // 3. الرسم
+        function updateTree() {
+            g.selectAll("*").remove();
+
+            const root = d3.hierarchy(treeData);
+            const treeLayout = d3.tree().nodeSize([100, 150]); 
+            treeLayout(root);
+
+            const nodes = root.descendants();
+            const links = root.links();
+
+            // الخطوط
+            g.selectAll(".link")
+                .data(links)
+                .enter().append("path")
+                .attr("class", "link")
+                .attr("d", d3.linkVertical()
+                    .x(d => d.x + (width / 2)) 
+                    .y(d => height - d.y - 100) 
+                );
+
+            // العقد (Group Container)
+            const nodeGroup = g.selectAll(".node")
+                .data(nodes)
+                .enter().append("g")
+                .attr("class", "node")
+                // نستخدم التموضع هنا مرة واحدة
+                .attr("transform", d => `translate(${d.x + (width / 2)},${height - d.y - 100})`);
+
+            // الصور (الجذور والأوراق)
+            nodeGroup.filter(d => d.data.type === 'root' || d.data.type === 'leaf')
+                .append("image")
+                .attr("xlink:href", d => {
+                    if(d.data.type === "root") return "img/root.png"; 
+                    return "img/leaf.png";
+                })
+                .attr("width", d => d.data.type === "root" ? 120 : 60)
+                .attr("height", d => d.data.type === "root" ? 120 : 60)
+                .attr("x", d => d.data.type === "root" ? -60 : -30) // توسيط الصورة
+                .attr("y", d => d.data.type === "root" ? -60 : -30);
+
+            // الدوائر (الأبناء)
+            nodeGroup.filter(d => d.data.type === 'fruit')
+                .append("circle")
+                .attr("r", 25)
+                .style("fill", "#FF9800")
+                .style("stroke", "#F57C00")
+                .style("stroke-width", "3px");
+
+            // الأسماء
+            nodeGroup.append("text")
+                .attr("dy", d => d.data.type === 'root' ? 10 : 5) 
+                .text(d => d.data.name);
+
+            // التفاعل عند النقر (بدون مشاكل الحركة)
+            nodeGroup.on("click", (event, d) => {
+                // منع انتشار الحدث حتى لا يتعارض مع الزووم
+                event.stopPropagation();
+
+                document.getElementById("parentName").value = d.data.name;
+                
+                // إعادة تعيين الشفافية
+                d3.selectAll("image").style("opacity", 0.4);
+                d3.selectAll("circle").style("opacity", 0.4);
+                
+                // تظليل العنصر المختار فقط
+                const selected = d3.select(event.currentTarget);
+                selected.select("image").style("opacity", 1);
+                selected.select("circle").style("opacity", 1);
+            });
+        }
+
+        // 4. الإضافة
+        function findNodeAndAddChild(node, parentName, newChildName, newType) {
+            if (node.name === parentName) {
+                if (!node.children) node.children = [];
+                node.children.push({ name: newChildName, type: newType, children: [] });
+                return true;
+            }
+            if (node.children) {
+                for (let child of node.children) {
+                    if (findNodeAndAddChild(child, parentName, newChildName, newType)) return true;
+                }
+            }
+            return false;
+        }
+
+        function addMember() {
+            const parentName = document.getElementById("parentName").value;
+            const childName = document.getElementById("childName").value;
+            const childType = document.getElementById("childType").value;
+
+            if (!parentName || !childName) { alert("أكمل البيانات"); return; }
+
+            if (findNodeAndAddChild(treeData, parentName, childName, childType)) {
+                saveData();
+                updateTree();
+                document.getElementById("childName").value = "";
+                d3.selectAll("image").style("opacity", 1);
+                d3.selectAll("circle").style("opacity", 1);
+            } else {
+                alert("لم يتم العثور على الأب.");
+            }
+        }
+
+        initTree();
+    </script>
+</body>
+</html>
